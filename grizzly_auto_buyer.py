@@ -18,8 +18,8 @@ BASE_URL = "https://api.grizzlysms.com/stubs/handler_api.php"
 # Omkar Cloud API Key for MNP Checking
 OMKAR_API_KEY = os.environ.get("OMKAR_API_KEY", "")
 
-SERVICE = os.environ.get("GRIZZLY_SERVICE", "jio")
-COUNTRY = os.environ.get("GRIZZLY_COUNTRY", "22")
+SERVICE = "jio"
+COUNTRY = "22"
 DEFAULT_COUNT = 5
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
