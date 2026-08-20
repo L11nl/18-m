@@ -272,6 +272,7 @@ def kb_providers(sel):
         btn_success(sc("Select All"), "pv_all",  "check"),
         btn_danger( sc("Clear All"),  "pv_none", "cross"),
     ])
+    rows.append([btn_primary("📱 يدوي", "manual_start", "phone")])
     rows.append([btn_primary(f"{sc('Choose Speed')} →", "go_speed", "rocket")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -570,6 +571,55 @@ async def cb_batch(cb: CallbackQuery):
         ]]))
     bot_db.log_activity(uid, "start_sniper", f"{labels} spd={speed} bat={batch}")
     await cb.answer(f"🚀 {sc('Started!')}")
+
+
+# ── Manual number flow ───────────────────────────────────────────────────────
+@dp.callback_query(F.data == "manual_start")
+async def cb_manual_start(cb: CallbackQuery):
+    uid = cb.from_user.id
+    _sessions.setdefault(uid, {})
+    _sessions[uid]["manual_step"] = "number"
+    await cb.message.edit_text(
+        "📱 <b>الوضع اليدوي</b>\n\nأرسل الرقم الهندي الآن (مثال: 91xxxxxxxxxx)\n\nسيتم انتظار الكود ثم إرساله للمتابعة.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="❌ إلغاء", callback_data="manual_cancel")
+        ]])
+    )
+    await cb.answer()
+
+@dp.callback_query(F.data == "manual_cancel")
+async def cb_manual_cancel(cb: CallbackQuery):
+    _sessions.pop(cb.from_user.id, None)
+    await cb.message.edit_text("❌ تم إلغاء الوضع اليدوي", reply_markup=kb_main())
+    await cb.answer()
+
+@dp.message()
+async def manual_messages(msg: Message):
+    uid = msg.from_user.id
+    session = _sessions.get(uid, {})
+    step = session.get("manual_step")
+    if not step or not msg.text:
+        return
+
+    if step == "number":
+        session["manual_number"] = msg.text.strip()
+        session["manual_step"] = "otp"
+        await msg.answer(
+            "🔑 تم حفظ الرقم\n\nأرسل كود SMS الآن:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="❌ إلغاء", callback_data="manual_cancel")
+            ]])
+        )
+        return
+
+    if step == "otp":
+        otp = msg.text.strip()
+        number = session.get("manual_number", "")
+        if sio.connected:
+            await sio.emit("manual_otp_submit", {"phone": number, "otp": otp, "user_id": uid})
+        session["manual_step"] = None
+        await msg.answer("✅ تم إرسال الكود للمتابعة")
 
 # ── Order controls ────────────────────────────────────────────────────────────
 @dp.callback_query(F.data.startswith("otp:"))
