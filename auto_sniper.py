@@ -22,8 +22,8 @@ import shutil
 PROVIDERS = {
     "UOTP": {
         "url": "https://uotp.store/api/stubs/handler_api.php",
-        "key": "qSkMMcEsXPALYLJUyt4OLCShhPiRlm9qrm2qqiIU",
-        "service": "jio", "country": "22", "delay": 2
+        "key": os.environ.get("UOTP_API_KEY", ""),
+        "service": os.environ.get("UOTP_SERVICE", "jiomart"), "country": os.environ.get("UOTP_COUNTRY", "22"), "delay": 2
     },
     "Grizzly": {
         "url": "https://api.grizzlysms.com/stubs/handler_api.php",
