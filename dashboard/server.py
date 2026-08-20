@@ -70,6 +70,15 @@ def decode_panel_accounts(panel_url):
 PANEL_URL = os.environ.get("PANEL_URL", "").strip()
 PANEL_ACCOUNTS = decode_panel_accounts(PANEL_URL)
 
+def _env_float(name, default):
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return float(default)
+
+def _env_csv(name):
+    return [item.strip() for item in os.environ.get(name, "").split(",") if item.strip()]
+
 # ─── Default Configuration ───────────────────────────────────────────────────
 DEFAULT_CONFIG = {
     "providers": {
@@ -81,9 +90,17 @@ DEFAULT_CONFIG = {
             "delay": 3
         },
         "UOTP": {
-            "url": "https://uotp.store/api/stubs/handler_api.php",
-            "key": os.environ.get("UOTP_API_KEY", ""),
-            "service": "jio", "country": "22", "delay": 2
+            "url": os.environ.get(
+                "UOTP_BASE_URL",
+                "https://uotp.store/api/stubs/handler_api.php"
+            ).strip(),
+            "key": os.environ.get("UOTP_API_KEY", "").strip(),
+            "service": os.environ.get("UOTP_SERVICE", "jiomart").strip() or "jiomart",
+            "country": os.environ.get("UOTP_COUNTRY", "22").strip() or "22",
+            "operator": os.environ.get("UOTP_OPERATOR", "").strip(),
+            "delay": _env_float("UOTP_DELAY", 2),
+            "confirm_on_purchase": True,
+            "complete_on_success": True
         },
         "Grizzly": {
             "url": "https://api.grizzlysms.com/stubs/handler_api.php",
@@ -91,9 +108,15 @@ DEFAULT_CONFIG = {
             "service": "jio", "country": "22", "delay": 3
         },
         "SMSBower": {
-            "url": "https://smsbower.page/stubs/handler_api.php",
-            "key": os.environ.get("SMSBOWER_API_KEY", ""),
-            "service": "jio", "country": "22", "delay": 3
+            "url": os.environ.get(
+                "SMSBOWER_BASE_URL",
+                "https://smsbower.page/stubs/handler_api.php"
+            ).strip(),
+            "key": os.environ.get("SMSBOWER_API_KEY", "").strip(),
+            "service": os.environ.get("SMSBOWER_SERVICE", "jioMart").strip() or "jioMart",
+            "country": os.environ.get("SMSBOWER_COUNTRY", "22").strip() or "22",
+            "maxPrice": os.environ.get("SMSBOWER_MAX_PRICE", "0.094").strip() or "0.094",
+            "delay": _env_float("SMSBOWER_DELAY", 3)
         },
         "Tiger": {
             "url": "https://api.tiger-sms.com/stubs/handler_api.php",
@@ -121,7 +144,7 @@ DEFAULT_CONFIG = {
     ] or [u.strip() for u in os.environ.get("FIREBASE_URLS", "").split(",") if u.strip()],
     "firebase_accounts": PANEL_ACCOUNTS,  # auto-populated from PANEL_URL when present
     "otpsms_servers": ["1", "2", "5", "6", "7", "8", "9", "11", "12", "13", "33", "36", "71", "234", "458", "2344", "4566", "64653"],
-    "uotp_servers": ["5", "3", "4", "2", "1", "8"],
+    "uotp_operators": _env_csv("UOTP_OPERATORS"),
     "otpdoctor_services": ["13318", "13273"],
     "omkar_keys": [k.strip() for k in os.environ.get("OMKAR_API_KEYS", "").split(",") if k.strip()],
     "omkar_usage": {},
@@ -139,39 +162,71 @@ JIO_LOGIN_URL = "https://www.jio.com/selfcare//"
 
 # ─── Load / Save Config ──────────────────────────────────────────────────────
 def load_config():
+    merged = {
+        **DEFAULT_CONFIG,
+        "providers": {
+            name: dict(values)
+            for name, values in DEFAULT_CONFIG["providers"].items()
+        },
+    }
+
     if os.path.exists(CONFIG_FILE):
         try:
-            with open(CONFIG_FILE, 'r') as f:
+            with open(CONFIG_FILE, "r") as f:
                 saved = json.load(f)
-                # Deep merge providers so new ones (like FirebaseDirect) appear
-                if "providers" in saved:
-                    for p_name, p_data in DEFAULT_CONFIG["providers"].items():
-                        if p_name not in saved["providers"]:
-                            saved["providers"][p_name] = p_data
-                
-                # Merge with defaults for any missing keys
-                merged = DEFAULT_CONFIG.copy()
-                merged.update(saved)
-                # Force dynamic keys from env to override saved static keys
-                for p_name, p_data in merged.get("providers", {}).items():
-                    default_key = DEFAULT_CONFIG["providers"].get(p_name, {}).get("key")
-                    if default_key:
-                        p_data["key"] = default_key
-                merged["omkar_keys"] = DEFAULT_CONFIG["omkar_keys"]
-                if "firebase_urls" not in merged:
-                    merged["firebase_urls"] = DEFAULT_CONFIG["firebase_urls"]
-                if "firebase_accounts" not in merged:
-                    # Migrate: wrap existing firebase_urls as accounts with no key
-                    merged["firebase_accounts"] = [{"url": u, "key": ""} for u in merged["firebase_urls"]]
 
-                # PANEL_URL always overrides stale config.json panel/Firebase entries.
-                if PANEL_ACCOUNTS:
-                    merged["firebase_accounts"] = PANEL_ACCOUNTS
-                    merged["firebase_urls"] = [a["url"] for a in PANEL_ACCOUNTS]
-                return merged
-        except:
-            pass
-    return DEFAULT_CONFIG.copy()
+            for key, value in saved.items():
+                if key != "providers":
+                    merged[key] = value
+
+            for p_name, p_data in saved.get("providers", {}).items():
+                merged["providers"].setdefault(p_name, {})
+                if isinstance(p_data, dict):
+                    merged["providers"][p_name].update(p_data)
+        except Exception as exc:
+            print(f"Failed to load config.json: {exc}")
+
+    # Railway/environment values must override stale config.json values.
+    for p_name, default_data in DEFAULT_CONFIG["providers"].items():
+        merged["providers"].setdefault(p_name, {})
+        default_key = default_data.get("key")
+        if default_key:
+            merged["providers"][p_name]["key"] = default_key
+
+    # UOTP migration: this integration uses JioMart in India and no operator
+    # unless UOTP_OPERATOR/UOTP_OPERATORS is explicitly configured.
+    uotp = merged["providers"].setdefault("UOTP", {})
+    uotp_defaults = DEFAULT_CONFIG["providers"]["UOTP"]
+    for field in (
+        "url", "service", "country", "operator", "delay",
+        "confirm_on_purchase", "complete_on_success",
+    ):
+        uotp[field] = uotp_defaults[field]
+    if uotp_defaults.get("key"):
+        uotp["key"] = uotp_defaults["key"]
+    merged["uotp_operators"] = DEFAULT_CONFIG.get("uotp_operators", [])
+
+    smsbower = merged["providers"].setdefault("SMSBower", {})
+    smsbower_defaults = DEFAULT_CONFIG["providers"]["SMSBower"]
+    for field in ("url", "service", "country", "maxPrice", "delay"):
+        smsbower[field] = smsbower_defaults[field]
+    if smsbower_defaults.get("key"):
+        smsbower["key"] = smsbower_defaults["key"]
+
+    merged["omkar_keys"] = DEFAULT_CONFIG["omkar_keys"]
+    if "firebase_urls" not in merged:
+        merged["firebase_urls"] = DEFAULT_CONFIG["firebase_urls"]
+    if "firebase_accounts" not in merged:
+        merged["firebase_accounts"] = [
+            {"url": url, "key": ""} for url in merged["firebase_urls"]
+        ]
+
+    # PANEL_URL always overrides stale config.json panel/Firebase entries.
+    if PANEL_ACCOUNTS:
+        merged["firebase_accounts"] = PANEL_ACCOUNTS
+        merged["firebase_urls"] = [account["url"] for account in PANEL_ACCOUNTS]
+
+    return merged
 
 def save_config(cfg):
     with open(CONFIG_FILE, 'w') as f:
@@ -245,6 +300,7 @@ class State:
     # Firebase State
     firebase_otp_queues = {}
     firebase_listener_task = None
+    provider_error_state = {}
 
 state = State()
 
@@ -411,66 +467,103 @@ async def get_carrier(number_str):
             pass
     return "Unknown"
 
+async def set_activation_status(p_name, aid, status):
+    """Call the handler_api setStatus endpoint and return its plain-text reply."""
+    cfg = config["providers"].get(p_name, {})
+    if not cfg or not cfg.get("url") or not cfg.get("key"):
+        return "BAD_KEY"
+    try:
+        params = {
+            "action": "setStatus",
+            "api_key": cfg["key"],
+            "status": str(status),
+            "id": str(aid),
+        }
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with state.http_session.get(cfg["url"], params=params, timeout=timeout) as resp:
+            return (await resp.text()).strip()
+    except Exception as exc:
+        return f"ERROR:{type(exc).__name__}:{exc}"
+
 async def buy_number(p_name):
     cfg = config["providers"].get(p_name, {})
     if not cfg:
-        return {"status": "error"}
-    
-    # Base parameters
+        return {"status": "error", "raw": "UNKNOWN_PROVIDER"}
+    if not cfg.get("key"):
+        return {"status": "error", "raw": "API_KEY_NOT_CONFIGURED"}
+
     params = {"action": "getNumber", "api_key": cfg["key"]}
     if cfg.get("country"):
-        params["country"] = cfg["country"]
-    
-    # Handle provider-specific rotations (servers or services)
+        params["country"] = str(cfg["country"])
+
     rotations = [None]
     if p_name == "OTPSMS":
-        rotations = config.get("otpsms_servers", [])
+        rotations = config.get("otpsms_servers", []) or [None]
         params["service"] = cfg["service"]
     elif p_name == "UOTP":
-        rotations = config.get("uotp_servers", [])
-        params["service"] = cfg["service"]
+        params["service"] = cfg.get("service", "jiomart")
+        operators = config.get("uotp_operators", [])
+        configured_operator = str(cfg.get("operator", "")).strip()
+        rotations = operators or ([configured_operator] if configured_operator else [None])
     elif p_name == "OTPDoctor":
-        rotations = config.get("otpdoctor_services", [])
+        rotations = config.get("otpdoctor_services", []) or [None]
     else:
         params["service"] = cfg["service"]
-        
+        if cfg.get("maxPrice"):
+            params["maxPrice"] = str(cfg["maxPrice"])
+
+    last_reply = "NO_RESPONSE"
     for rot in rotations:
+        request_params = dict(params)
         if p_name == "OTPSMS" and rot:
-            params["server"] = rot
+            request_params["server"] = rot
         elif p_name == "UOTP" and rot:
-            params["operator"] = rot
+            request_params["operator"] = rot
         elif p_name == "OTPDoctor" and rot:
-            params["service"] = rot
-            
+            request_params["service"] = rot
+
         try:
-            async with state.http_session.get(cfg["url"], params=params) as resp:
+            timeout = aiohttp.ClientTimeout(total=15)
+            async with state.http_session.get(
+                cfg["url"], params=request_params, timeout=timeout
+            ) as resp:
                 text = (await resp.text()).strip()
+                last_reply = text or f"HTTP_{resp.status}_EMPTY_RESPONSE"
                 if text.startswith("ACCESS_NUMBER:"):
-                    parts = text.split(":")
-                    return {"status": "success", "aid": parts[1], "phone": parts[2]}
-        except:
-            pass
-    return {"status": "error"}
+                    parts = text.split(":", 2)
+                    if len(parts) != 3:
+                        return {"status": "error", "raw": f"MALFORMED_RESPONSE:{text}"}
+                    aid, phone = parts[1], parts[2]
+                    ready_reply = None
+                    if cfg.get("confirm_on_purchase"):
+                        ready_reply = await set_activation_status(p_name, aid, "1")
+                    return {
+                        "status": "success",
+                        "aid": aid,
+                        "phone": phone,
+                        "raw": text,
+                        "ready_reply": ready_reply,
+                        "operator": rot,
+                    }
+        except Exception as exc:
+            last_reply = f"ERROR:{type(exc).__name__}:{exc}"
+
+    return {"status": "error", "raw": last_reply}
 
 async def get_otp_status(p_name, aid):
     cfg = config["providers"].get(p_name, {})
-    if not cfg:
-        return "ERROR"
+    if not cfg or not cfg.get("url") or not cfg.get("key"):
+        return "BAD_KEY"
     try:
-        async with state.http_session.get(cfg["url"], params={"action": "getStatus", "api_key": cfg["key"], "id": aid}) as resp:
+        timeout = aiohttp.ClientTimeout(total=15)
+        params = {"action": "getStatus", "api_key": cfg["key"], "id": aid}
+        async with state.http_session.get(cfg["url"], params=params, timeout=timeout) as resp:
             return (await resp.text()).strip()
-    except:
-        return "ERROR"
+    except Exception as exc:
+        return f"ERROR:{type(exc).__name__}:{exc}"
 
 async def cancel_api_number(p_name, aid):
-    cfg = config["providers"].get(p_name, {})
-    if not cfg:
-        return "ERROR"
-    try:
-        async with state.http_session.get(cfg["url"], params={"action": "setStatus", "api_key": cfg["key"], "status": "8", "id": aid}) as resp:
-            return (await resp.text()).strip()
-    except:
-        return "ERROR"
+    return await set_activation_status(p_name, aid, "8")
 
 # ─── Order Helpers ────────────────────────────────────────────────────────────
 def order_event(order, msg):
@@ -494,7 +587,7 @@ async def emit_log(msg, level="info"):
     await sio.emit("log", {"message": msg, "level": level})
 
 # ─── Number Processing Pipeline ──────────────────────────────────────────────
-async def process_number(p_name, aid, phone):
+async def process_number(p_name, aid, phone, purchase_meta=None):
     order_id = str(uuid.uuid4())[:8]
     order = {
         "id": order_id, "aid": aid, "phone": phone, "provider": p_name,
@@ -502,6 +595,8 @@ async def process_number(p_name, aid, phone):
         "timestamp": time.time(), "events": []
     }
     order_event(order, f"Number purchased from {p_name}")
+    if purchase_meta and purchase_meta.get("ready_reply"):
+        order_event(order, f"Activation ready response: {purchase_meta['ready_reply']}")
     await emit_order(order)
     state.stats["fetched"] += 1
     record_analytics_event(p_name, "fetched")
@@ -618,9 +713,16 @@ async def _handle_jio_number_impl(order):
         if elapsed > 121 and page and not resend_clicked:
             resend_clicked = True
             try:
-                order_event(order, "2 mins passed. Clicking Resend OTP on jio.com...")
+                provider_resend = await set_activation_status(p_name, aid, "3")
+                order_event(
+                    order,
+                    f"2 mins passed. Requesting resend: provider={provider_resend}",
+                )
                 await emit_order(order)
-                await emit_log(f"[{phone}] Clicking Resend OTP...", "warn")
+                await emit_log(
+                    f"🔄 [{p_name}] طلب إعادة إرسال تلقائي للرقم {phone}: {provider_resend}",
+                    "warn",
+                )
                 await page.locator('button[aria-label="Resend OTP"]').click(timeout=5000)
                 await asyncio.sleep(1)
             except Exception as e:
@@ -643,11 +745,24 @@ async def _handle_jio_number_impl(order):
             await emit_order(order)
             await emit_log(f"✅ [{p_name}] {phone} OTP: {otp_code}", "success")
             break
+        elif status == "STATUS_WAIT_RESEND":
+            if not order.get("_wait_resend_logged"):
+                order["_wait_resend_logged"] = True
+                order_event(order, "Provider is waiting for a resend request")
+                await emit_order(order)
         elif "CANCEL" in status:
             order["status"] = "cancelled"
             order_event(order, "Cancelled by SMS provider (no OTP delivered)")
             await emit_order(order)
             await emit_log(f"[{p_name}] {phone} cancelled by server", "error")
+            if context:
+                await context.close()
+            return
+        elif status in {"BAD_KEY", "BAD_ACTION", "NO_ACTIVATION", "ACCOUNT_BAN"} or status.startswith("ERROR:"):
+            order["status"] = "cancelled"
+            order_event(order, f"Provider status error: {status}")
+            await emit_order(order)
+            await emit_log(f"❌ [{p_name}] {phone}: {status}", "error")
             if context:
                 await context.close()
             return
@@ -731,7 +846,11 @@ async def _handle_jio_number_impl(order):
                     await emit_log(f"🎉 [{phone}] Gemini Link Saved!", "success")
                     await asyncio.sleep(2)
                     
-                    # Successfully done, close browser
+                    # Successfully done, close browser and complete the activation.
+                    if config["providers"].get(p_name, {}).get("complete_on_success"):
+                        complete_reply = await set_activation_status(p_name, aid, "6")
+                        order_event(order, f"Activation completed: {complete_reply}")
+                        await emit_order(order)
                     await context.close()
                     order["_context"] = None
                     return
@@ -743,6 +862,9 @@ async def _handle_jio_number_impl(order):
             # Fallback to manual mode if automation failed or timed out
             order["status"] = "extract_link"
             order_event(order, "✅ Login successful! Banner not found, do manual extraction.")
+            if config["providers"].get(p_name, {}).get("complete_on_success"):
+                complete_reply = await set_activation_status(p_name, aid, "6")
+                order_event(order, f"Activation completed: {complete_reply}")
             await emit_order(order)
             await emit_log(f"🎉 [{p_name}] {phone} LOGGED IN! Extract link now.", "success")
             
@@ -768,6 +890,13 @@ async def _handle_jio_number_impl(order):
             await emit_order(order)
             await emit_log(f"[{phone}] Browser error: {str(e)[:80]}", "error")
             await context.close()
+
+    # OTP-only mode (browser unavailable): keep the code visible in the order,
+    # but close the UOTP activation cleanly so it does not remain active forever.
+    if not page and otp_code and config["providers"].get(p_name, {}).get("complete_on_success"):
+        complete_reply = await set_activation_status(p_name, aid, "6")
+        order_event(order, f"Activation completed after OTP delivery: {complete_reply}")
+        await emit_order(order)
 
 async def cancel_order(order, instant=False):
     order["status"] = "cancelling"
@@ -1204,8 +1333,15 @@ async def firebase_sniper_worker(speed_delay):
 
 # ─── Sniper Workers ──────────────────────────────────────────────────────────
 async def sniper_worker(p_name, speed_delay):
-    delay = config["providers"].get(p_name, {}).get("delay", 3) * speed_delay
-    
+    cfg = config["providers"].get(p_name, {})
+    delay = cfg.get("delay", 3) * speed_delay
+
+    await emit_log(
+        f"🔎 [{p_name}] بدء طلب الأرقام: service={cfg.get('service', '-')} "
+        f"country={cfg.get('country', '-')}",
+        "info",
+    )
+
     while not state.stop_event.is_set():
         if state.jio_count >= state.target_count:
             await asyncio.sleep(delay)
@@ -1213,9 +1349,33 @@ async def sniper_worker(p_name, speed_delay):
         try:
             result = await buy_number(p_name)
             if result["status"] == "success":
-                asyncio.create_task(process_number(p_name, result["aid"], result["phone"]))
-        except:
-            pass
+                phone = result["phone"]
+                aid = result["aid"]
+                ready = result.get("ready_reply")
+                ready_text = f" | ready={ready}" if ready else ""
+                await emit_log(
+                    f"📱 [{p_name}] تم شراء الرقم {phone} | ID={aid}{ready_text}",
+                    "success",
+                )
+                asyncio.create_task(process_number(p_name, aid, phone, result))
+            else:
+                raw = result.get("raw", "UNKNOWN_ERROR")
+                now = time.time()
+                previous = state.provider_error_state.get(p_name, {})
+                if raw != previous.get("raw") or now - previous.get("time", 0) >= 30:
+                    state.provider_error_state[p_name] = {"raw": raw, "time": now}
+                    await emit_log(
+                        f"⚠️ [{p_name}] فشل شراء الرقم: {raw} "
+                        f"(service={cfg.get('service', '-')}, country={cfg.get('country', '-')})",
+                        "warn",
+                    )
+        except Exception as exc:
+            now = time.time()
+            raw = f"ERROR:{type(exc).__name__}:{exc}"
+            previous = state.provider_error_state.get(p_name, {})
+            if raw != previous.get("raw") or now - previous.get("time", 0) >= 30:
+                state.provider_error_state[p_name] = {"raw": raw, "time": now}
+                await emit_log(f"❌ [{p_name}] {raw}", "error")
         await asyncio.sleep(delay)
 
 # ─── Socket.IO Events ────────────────────────────────────────────────────────
@@ -1387,12 +1547,25 @@ async def on_request_new_otp(sid, data):
     order = state.orders.get(order_id)
     if not order:
         return
+
+    provider_reply = await set_activation_status(order["provider"], order["aid"], "3")
+    page = order.get("_page")
+    page_reply = "no-open-page"
+    if page:
+        try:
+            await page.locator('button[aria-label="Resend OTP"]').click(timeout=5000)
+            page_reply = "clicked"
+        except Exception as exc:
+            page_reply = f"click-failed:{type(exc).__name__}"
+
     order["status"] = "waiting_otp"
     order["otp"] = None
-    order_event(order, "Re-polling for new OTP...")
+    order_event(order, f"New OTP requested: provider={provider_reply}, page={page_reply}")
     await emit_order(order)
-    await emit_log(f"Re-polling OTP for {order['phone']}...", "info")
-    asyncio.create_task(handle_jio_number(order))
+    await emit_log(
+        f"🔄 [{order['provider']}] طلب رمز جديد للرقم {order['phone']}: {provider_reply}",
+        "info",
+    )
 
 @sio.on('force_cancel')
 async def on_force_cancel(sid, data):
@@ -1433,7 +1606,21 @@ async def on_get_settings(sid):
 @sio.on('save_settings')
 async def on_save_settings(sid, data):
     global config
-    config.update(data)
+    data = data or {}
+
+    provider_updates = data.get("providers", {})
+    if isinstance(provider_updates, dict):
+        config.setdefault("providers", {})
+        for p_name, p_update in provider_updates.items():
+            if not isinstance(p_update, dict):
+                continue
+            config["providers"].setdefault(p_name, {})
+            config["providers"][p_name].update(p_update)
+
+    for key, value in data.items():
+        if key != "providers":
+            config[key] = value
+
     save_config(config)
     await emit_log("⚙️ Settings saved!", "success")
     await sio.emit("settings_saved")
