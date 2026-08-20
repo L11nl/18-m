@@ -1,0 +1,10 @@
+python-dotenv
+fastapi
+uvicorn[standard]
+aiohttp==3.9.5
+requests
+playwright
+psutil
+python-socketio==5.11.3
+python-engineio==4.9.1
+aiogram==3.13.1
