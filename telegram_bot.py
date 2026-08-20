@@ -161,7 +161,7 @@ dash_system:    dict = {}
 dash_analytics: dict = {}
 sniping_active: bool = False
 
-ALL_PROVIDERS = ["OTPSMS","UOTP","Grizzly","Tiger","MeowSMS","OTPDoctor","FirebaseDirect"]
+ALL_PROVIDERS = ["OTPSMS","UOTP","Grizzly","SMSBower","Tiger","MeowSMS","OTPDoctor","FirebaseDirect"]
 SPEEDS = {
     "slow":   ("🐢", sc("Slow"),   "2ꜱ ᴅᴇʟᴀʏ"),
     "normal": ("⚡", sc("Normal"), "1ꜱ ᴅᴇʟᴀʏ"),
@@ -981,13 +981,14 @@ PROVIDER_ENV_MAP = {
     "OTPSMS":       "OTPSMS_API_KEY",
     "UOTP":         "UOTP_API_KEY",
     "Grizzly":      "GRIZZLY_API_KEY",
+    "SMSBower":     "SMSBOWER_API_KEY",
     "Tiger":        "TIGER_API_KEY",
     "MeowSMS":      "MEOWSMS_API_KEY",
     "OTPDoctor":    "OTPDOCTOR_API_KEY",
     "FirebaseDirect": None,   # uses FIREBASE_URLS (comma-separated), not a key
 }
 PROVIDER_ALIASES = {
-    "otpsms":"OTPSMS","uotp":"UOTP","grizzly":"Grizzly","tiger":"Tiger",
+    "otpsms":"OTPSMS","uotp":"UOTP","grizzly":"Grizzly","smsbower":"SMSBower","sms":"SMSBower","tiger":"Tiger",
     "meow":"MeowSMS","meowsms":"MeowSMS","otpdoctor":"OTPDoctor",
     "firebase":"FirebaseDirect","firebasedirect":"FirebaseDirect","fb":"FirebaseDirect",
 }

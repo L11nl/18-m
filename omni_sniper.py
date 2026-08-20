@@ -27,6 +27,11 @@ PROVIDERS = {
         "key": "c59504cdd271fe4a967257bba4b37ab6",
         "service": "jio", "country": "22", "delay": 3
     },
+    "SMSBower": {
+        "url": "https://smsbower.page/stubs/handler_api.php",
+        "key": os.environ.get("SMSBOWER_API_KEY", ""),
+        "service": "jio", "country": "22", "delay": 3
+    },
     "Tiger": {
         "url": "https://api.tiger-sms.com/stubs/handler_api.php",
         "key": "Ke24YmEU9RVCz5IGaQdvnhygEOJjBio6",
